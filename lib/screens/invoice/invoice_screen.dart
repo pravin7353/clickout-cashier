@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:clickout_cashier/core/theme/app_theme.dart';
+import 'package:flutter/services.dart';
 
 class InvoiceScreen extends StatelessWidget {
   final Map<String, dynamic> orderData;
@@ -150,78 +151,68 @@ class InvoiceScreen extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _buildRow(
-                                "Order ID",
-                                "#${orderId.substring(0, 8).toUpperCase()}",
+                              // 🚀 FIX 1: Custom Row for Order ID with Copy Icon
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 5,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      "Order ID",
+                                      style: TextStyle(color: Colors.grey),
+                                    ),
+                                    Row(
+                                      children: [
+                                        Text(
+                                          "#${orderId.substring(0, 8).toUpperCase()}",
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        GestureDetector(
+                                          onTap: () {
+                                            Clipboard.setData(
+                                              ClipboardData(
+                                                text: orderId
+                                                    .substring(0, 8)
+                                                    .toUpperCase(),
+                                              ),
+                                            );
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  "Order ID Copied!",
+                                                ),
+                                                duration: Duration(seconds: 1),
+                                                backgroundColor: Colors.green,
+                                              ),
+                                            );
+                                          },
+                                          child: const Icon(
+                                            Icons.copy,
+                                            size: 16,
+                                            color: Colors.blueAccent,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                               _buildRow("Date", formattedDate),
                               _buildRow("Payment Mode", "CASH"),
+                              // 🚀 FIX 2: Show Actual Name instead of ugly UID
                               _buildRow(
                                 "Cashier",
-                                liveData['collectedBy'] ?? "Unknown",
+                                liveData['scannedByName'] ?? "Store Cashier",
                               ),
-
-                              const Divider(height: 30, thickness: 1),
-
-                              const Text(
-                                "ITEMS PURCHASED",
-                                style: TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-
-                              // 🚀 FIX: SMART PARSING FOR ITEMS (No more Nulls!)
-                              ...items.map((item) {
-                                int qty =
-                                    int.tryParse(
-                                      item['qty']?.toString() ?? '',
-                                    ) ??
-                                    int.tryParse(
-                                      item['quantity']?.toString() ?? '1',
-                                    ) ??
-                                    1;
-
-                                double price =
-                                    double.tryParse(
-                                      item['price']?.toString() ?? '',
-                                    ) ??
-                                    double.tryParse(
-                                      item['originalPrice']?.toString() ?? '',
-                                    ) ??
-                                    double.tryParse(
-                                      item['finalUnitPrice']?.toString() ?? '0',
-                                    ) ??
-                                    0.0;
-
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 5,
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          "${qty}x  ${item['name'] ?? 'Item'}",
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ),
-                                      Text(
-                                        "₹${price.toStringAsFixed(0)}",
-                                        style: const TextStyle(
-                                          fontFamily: 'DejaVuSansMono',
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }),
 
                               const Divider(height: 30, thickness: 1),
 
@@ -250,30 +241,9 @@ class InvoiceScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: SizedBox(
-                          width: double.infinity,
-                          height: 50,
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Print feature coming soon!"),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.print),
-                            label: const Text("PRINT RECEIPT"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.black87,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
+                      const SizedBox(
+                        height: 20,
+                      ), // 🚀 FIX 3: Print receipt button removed completely
                     ],
                   ),
                 ),

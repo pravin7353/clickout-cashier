@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:clickout_cashier/core/theme/app_theme.dart';
 import 'package:clickout_cashier/screens/invoice/invoice_screen.dart';
-import 'package:clickout_cashier/utils/session_manager.dart';
 
 class RecentCollectionsScreen extends StatefulWidget {
   // 🔒 SECURITY: Branch Code required
@@ -32,14 +31,21 @@ class _RecentCollectionsScreenState extends State<RecentCollectionsScreen> {
   // 🛠️ DATA LOADING FUNCTION
   void _loadOrders() {
     setState(() {
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final todayEnd = todayStart.add(const Duration(days: 1));
+
       _ordersStream = FirebaseFirestore.instance
           .collection('orders')
-          // 🛡️ THE SAAS ISOLATION RULE
-          .where('tenantId', isEqualTo: SessionManager.tenantId)
-          .where('storeId', isEqualTo: SessionManager.storeId)
+          .where('branchCode', isEqualTo: widget.branchCode)
           .where('status', isEqualTo: 'completed')
+          .where(
+            'timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart),
+          )
+          .where('timestamp', isLessThan: Timestamp.fromDate(todayEnd))
           .orderBy('timestamp', descending: true)
-          .limit(50)
+          .limit(100)
           .snapshots();
     });
   }

@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:vibration/vibration.dart';
 import 'package:intl/intl.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import 'package:clickout_cashier/core/theme/app_theme.dart';
@@ -14,6 +15,7 @@ import 'package:clickout_cashier/screens/collections/recent_collections_screen.d
 import 'package:clickout_cashier/utils/session_manager.dart';
 import 'package:clickout_cashier/widgets/daily_summary_card.dart';
 import 'package:clickout_cashier/services/analytics_service.dart';
+import 'package:clickout_cashier/screens/auth/login_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final String empName;
@@ -58,8 +60,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // 1. Find all PENDING orders (SaaS ISOLATED)
       final snapshot = await FirebaseFirestore.instance
           .collection('orders')
-          // 🛑 PURANI LINE HATA DO: .where('branchCode', isEqualTo: widget.martId)
-          // 🚀 NAYI LINES LAGA DO: Data Isolation for Multi-Tenant
+          // 🚀 Data Isolation for Multi-Tenant
           .where('tenantId', isEqualTo: SessionManager.tenantId)
           .where('storeId', isEqualTo: SessionManager.storeId)
           .where('exitStatus', whereIn: ['PENDING', 'READY_FOR_EXIT'])
@@ -154,9 +155,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       ElevatedButton(
                         onPressed: () {
-                          SessionManager.stopTimer();
-                          Navigator.pop(context);
-                          Navigator.pop(context);
+                          SessionManager.stopTimer(); // Ye purana data clear karega
+                          // 🚀 THE FIX: Do baar pop karke black screen laane ki jagah, sab clear karke Login pe push karo!
+                          Navigator.pushAndRemoveUntil(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const LoginScreen(),
+                            ),
+                            (Route<dynamic> route) => false,
+                          );
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
@@ -194,7 +201,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             Container(
               padding: const EdgeInsets.all(20),
-              color: AppTheme.primaryColor.withOpacity(0.1),
+              color: AppTheme.primaryColor.withValues(
+                alpha: 0.1,
+              ), // 🚀 FIX: Blue warning fix
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -216,11 +225,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               color: AppTheme.primaryDark,
                             ),
                           ),
+                          // 🚀 THE FIX: Proper ID format with fail-safe instead of raw UID
                           Text(
-                            "ID: ${widget.empId}",
+                            (widget.empId.isNotEmpty &&
+                                    widget.empId.length < 15)
+                                ? "ID: ${widget.empId} • Branch: ${widget.martId}"
+                                : "Branch: ${widget.martId}",
                             style: const TextStyle(
                               color: Colors.grey,
                               fontSize: 12,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
@@ -363,7 +377,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             leading: Container(
                               padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(
-                                color: Colors.green.withOpacity(0.1),
+                                color: Colors.green.withValues(
+                                  alpha: 0.1,
+                                ), // 🚀 FIX: Blue warning fix
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
@@ -446,7 +462,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
 // ==========================================
-// 📸 SCANNER PAGE (Maintained from previous fix)
+// 📸 SCANNER PAGE
 // ==========================================
 class ScannerPage extends StatefulWidget {
   final String empId;
@@ -603,48 +619,16 @@ class _ScannerPageState extends State<ScannerPage> {
     }
 
     try {
-      DocumentReference orderRef = FirebaseFirestore.instance
-          .collection('orders')
-          .doc(orderId);
-      String deviceId = await _getDeviceId();
-      double totalAmount = 0.0;
+      // 🛡️ SECURITY FIX: Ab client seedha Firestore me paymentStatus/exitStatus
+      // nahi likhta. Cloud Function (`confirmManualPayment`) server-side role +
+      // tenant/branch verify karke hi PAID mark karta hai.
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('confirmManualPayment')
+          .call({'orderId': orderId});
 
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        DocumentSnapshot doc = await transaction.get(orderRef);
-
-        if (!doc.exists) throw Exception("INVALID_QR");
-
-        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-        totalAmount = double.tryParse(data['totalAmount'].toString()) ?? 0.0;
-
-        if (data['status'] == 'completed' || data['paymentStatus'] == 'PAID') {
-          throw Exception("ALREADY_PAID");
-        }
-
-        // 🧠 HACK PREVENTION: Do not process EXPIRED orders
-        if (data['exitStatus'] == 'EXPIRED_BY_SYSTEM') {
-          throw Exception("EXPIRED_QR");
-        }
-
-        transaction.update(orderRef, {
-          'status': 'completed',
-          'paymentStatus': 'PAID',
-          'paymentMode': 'CASH',
-          'exitStatus': 'READY_FOR_EXIT',
-          'collectedBy': widget.empId,
-          'scannedByEmpId': widget.empId,
-          'scannedByName': widget.empName,
-
-          // 🚀 SAAS ROUTING IDs STAMPED
-          'tenantId': SessionManager.tenantId,
-          'storeId': SessionManager.storeId,
-          'branchCode': SessionManager.branchCode,
-
-          'deviceId': deviceId,
-          'scanTimestamp': FieldValue.serverTimestamp(),
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      });
+      final resultData = result.data as Map;
+      final double totalAmount =
+          double.tryParse(resultData['amount'].toString()) ?? 0.0;
 
       await _analytics.logScanSuccess(
         orderId: orderId,
@@ -673,18 +657,23 @@ class _ScannerPageState extends State<ScannerPage> {
           ],
         ),
       );
-    } catch (e, stack) {
-      if (e.toString().contains("INVALID_QR")) {
+    } on FirebaseFunctionsException catch (e, stack) {
+      if (e.code == 'not-found') {
         showError("Invalid QR Code!");
-      } else if (e.toString().contains("ALREADY_PAID")) {
+      } else if (e.code == 'already-exists') {
         _analytics.logDuplicateScan(orderId);
         showError("Already Paid!");
-      } else if (e.toString().contains("EXPIRED_QR")) {
+      } else if (e.code == 'failed-precondition') {
         showError("QR EXPIRED! This order was moved to Black Box.");
+      } else if (e.code == 'permission-denied') {
+        showError("This order does not belong to your branch.");
       } else {
         _analytics.logError(e, stack);
         showError("Network or DB Error. Try again.");
       }
+    } catch (e, stack) {
+      _analytics.logError(e, stack);
+      showError("Network or DB Error. Try again.");
     } finally {
       if (mounted) {
         Future.delayed(const Duration(milliseconds: 1500), () {
@@ -711,7 +700,8 @@ class ScannerOverlayPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.black.withOpacity(0.65)
+      ..color = Colors.black
+          .withValues(alpha: 0.65) // 🚀 FIX: Blue warning fix
       ..style = PaintingStyle.fill;
     final double scanAreaSize = size.width * 0.7;
     final Rect scanRect = Rect.fromCenter(

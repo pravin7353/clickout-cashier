@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.clickout_cashier"
+        applicationId = "com.clickout.cashier"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         

@@ -5,6 +5,7 @@ import 'package:clickout_cashier/services/analytics_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:clickout_cashier/auth/unified_auth_service.dart';
 import 'package:clickout_cashier/utils/session_manager.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -33,11 +34,64 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    setState(() => _isLoading = true);
+    /*setState(() => _isLoading = true);
 
     await UnifiedAuthService.sendPhoneOtp(
       phone: "+91${_phoneController.text.trim()}",
       onCodeSent: (verificationId) {
+*/
+    //=================================================================
+    //bypass hone ke baad bhi loading chalti rahegi, jab tak OTP screen pe nahi pahunch jate, taki user ko lage ki kuch to ho raha hai
+    //=======================================================
+
+    setState(() => _isLoading = true);
+
+    // 🔒 BRANCH VALIDATION — Phone + BranchCode match check
+    String cleanNumber = _phoneController.text.replaceAll(
+      RegExp(r'[^0-9]'),
+      '',
+    );
+    final branchCode = _branchCodeController.text.trim().toUpperCase();
+
+    final staffCheck = await FirebaseFirestore.instance
+        .collection('staff')
+        .where('phone', isEqualTo: cleanNumber)
+        .where('branchCode', isEqualTo: branchCode)
+        .where('isActive', isEqualTo: true)
+        .where('isDeleted', isEqualTo: false)
+        .limit(1)
+        .get();
+
+    if (staffCheck.docs.isEmpty) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "❌ Access Denied: Phone not registered for this branch.",
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    String finalPhone = "+91$cleanNumber";
+
+    // 🎯 EXACT FIREBASE MATCHING
+    if (cleanNumber == "8976543606") {
+      finalPhone = "+91 89765 43606";
+    } else if (cleanNumber == "9323137353") {
+      finalPhone = "+91 93232 37353"; // Guard number
+    }
+
+    // 🕵️ DEBUG LOG: Ye aapko VS Code / Android Studio ke console me dikhayega ki actually jaa kya raha hai
+    debugPrint("🚀🚀 SENDING TO FIREBASE EXACTLY AS: '$finalPhone'");
+
+    await UnifiedAuthService.sendPhoneOtp(
+      phone: finalPhone,
+      onCodeSent: (verificationId) {
+        //=================================================================
+        //bypass hone ke baad bhi loading chalti rahegi, jab tak OTP screen pe nahi pahunch jate, taki user ko lage ki kuch to ho raha hai
+        //=======================================================
         if (!mounted) return;
         setState(() {
           _verificationId = verificationId;
@@ -64,7 +118,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final userCred = await UnifiedAuthService.verifyOtpAndLogin(
         verificationId: _verificationId!,
         smsCode: _otpController.text.trim(),
-        roleCollection: 'employees',
+        roleCollection: 'staff', // 🚀 FIX 1: Collection ka naam 'staff' hoga
         initialData: {
           'branchCode': _branchCodeController.text.trim(),
           'role': 'CASHIER',
@@ -72,15 +126,40 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (mounted && userCred != null && userCred.user != null) {
-        final doc = await FirebaseFirestore.instance
-            .collection(
-              'employees',
-            ) // 👈 CHANGED: Pehle 'cashiers' tha, ab 'employees'
-            .doc(userCred.user!.uid)
+        // 🛡️ Custom claims (role/tenantId/branchCode) turant fresh karne ke liye
+        await Future.delayed(const Duration(seconds: 2));
+        await FirebaseAuth.instance.currentUser?.getIdToken(true);
+
+        // 🚀 FIX: UnifiedAuthService ne UID link kar diya hai, toh sidha UID se exact profile fetch karo!
+        final staffQuery = await FirebaseFirestore.instance
+            .collection('staff')
+            .where('uid', isEqualTo: userCred.user!.uid)
+            .limit(1)
             .get();
 
-        final data = doc.data() ?? {};
-        final name = data['name'] ?? 'Cashier';
+        if (staffQuery.docs.isEmpty) {
+          await UnifiedAuthService.logout('staff');
+          throw "Access Denied: Profile link failed.";
+        }
+
+        final doc = staffQuery.docs.first;
+        final data = doc.data();
+        final name = data['name'] ?? 'Staff Member';
+
+        // 🚨 SAAS DATA CHECKER (Duplicate Blocker)
+        if (data['tenantId'] == null || data['storeId'] == null) {
+          await UnifiedAuthService.logout('staff');
+          throw "⚠️ DUPLICATE TRASH DETECTED: Ye ek khali profile hai! Kripya Firebase me jake is number ki duplicate entry delete karein aur sirf Admin wali entry rakhein.";
+        }
+
+        // 🚨 ZERO TRUST AUTHORIZATION CHECK (The Bouncer)
+        bool isActive = data['isActive'] == true;
+        bool isDeleted = data['isDeleted'] == true;
+
+        if (!isActive || isDeleted) {
+          await UnifiedAuthService.logout('staff');
+          throw "Access Denied: Your account is pending admin approval or disabled.";
+        }
 
         // 🚀 THE SAAS INJECTION: Load routing IDs into Memory
         SessionManager.setStoreContext(
@@ -98,13 +177,23 @@ class _LoginScreenState extends State<LoginScreen> {
           debugPrint("Analytics Error Ignored: $analyticsError");
         }
 
+        await SessionManager.saveSession(
+          uid: userCred.user!.uid,
+          empName: name,
+          tId: data['tenantId'] ?? '',
+          sId: data['storeId'] ?? '',
+          zId: data['zoneId'] ?? '',
+          rId: data['regionId'] ?? '',
+          bCode: data['branchCode'] ?? _branchCodeController.text.trim(),
+        );
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (_) => DashboardScreen(
               empId: userCred.user!.uid,
               empName: name,
-              martId: SessionManager.branchCode, // Use from Session
+              martId: SessionManager.branchCode,
             ),
           ),
         );

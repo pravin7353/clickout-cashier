@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/theme/app_theme.dart';
-import '../utils/session_manager.dart';
 
 class DailySummaryCard extends StatelessWidget {
   final String branchCode;
@@ -15,12 +14,10 @@ class DailySummaryCard extends StatelessWidget {
     final startOfDay = DateTime(now.year, now.month, now.day);
 
     return StreamBuilder<QuerySnapshot>(
-      // 🚀 OPTIMIZED QUERY: Only 1 read per document update (No N+1 problem)
+      // 🚀 FIXED: Querying by branchCode instead of tenant/store IDs for stability
       stream: FirebaseFirestore.instance
           .collection('orders')
-          // 🛡️ THE SAAS ISOLATION RULE
-          .where('tenantId', isEqualTo: SessionManager.tenantId)
-          .where('storeId', isEqualTo: SessionManager.storeId)
+          .where('branchCode', isEqualTo: branchCode)
           .where(
             'timestamp',
             isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),

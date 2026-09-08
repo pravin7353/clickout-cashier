@@ -8,9 +8,10 @@ class UnifiedAuthService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   // ==========================================================
-  // 📱 1. PHONE OTP ENGINE (Customers, Guards, Cashiers)
+  // 🚀 1. PHONE OTP ENGINE (Customers, Guards, Cashiers)
   // ==========================================================
-  static final Map<String, int> _otpCooldowns = {};
+  // 🧠 SMART TRACKER: Ye yaad rakhega ki kis time par kitne OTP gaye
+  static final Map<String, List<int>> _otpHistory = {};
 
   static Future<void> sendPhoneOtp({
     required String phone,
@@ -19,10 +20,14 @@ class UnifiedAuthService {
   }) async {
     try {
       final now = DateTime.now().millisecondsSinceEpoch;
-      final lastSent = _otpCooldowns[phone] ?? 0;
+      final history = _otpHistory[phone] ?? [];
 
-      if (now - lastSent < 60000) {
-        throw "Please wait 60 seconds before requesting another OTP.";
+      // 🧹 Pehle ke 60 seconds se purane records hata do
+      history.removeWhere((timestamp) => now - timestamp > 60000);
+
+      // 🛑 Agar pichle 60 seconds me 2 baar OTP bhej chuke hain, toh block karo
+      if (history.length >= 2) {
+        throw "Too many attempts. Please wait 60 seconds.";
       }
 
       await _auth.verifyPhoneNumber(
@@ -36,8 +41,10 @@ class UnifiedAuthService {
           onError(e.message ?? "Verification failed.");
         },
         codeSent: (String verificationId, int? resendToken) async {
-          _otpCooldowns[phone] =
-              DateTime.now().millisecondsSinceEpoch; // 🛑 Static update
+          // 🚀 Record this attempt's timestamp
+          history.add(DateTime.now().millisecondsSinceEpoch);
+          _otpHistory[phone] = history;
+
           onCodeSent(verificationId);
         },
         codeAutoRetrievalTimeout: (String verificationId) {},
@@ -61,27 +68,42 @@ class UnifiedAuthService {
 
       UserCredential userCred = await _auth.signInWithCredential(credential);
 
-      // 🧠 AUTO-CREATION & ROLE ASSIGNMENT
+      // 🧠 AUTO-CREATION & ROLE ASSIGNMENT (LINK ADMIN PROFILES)
       if (userCred.user != null) {
-        final docRef = _db.collection(roleCollection).doc(userCred.user!.uid);
-        final doc = await docRef.get();
+        String phoneWithCode = userCred.user!.phoneNumber ?? '';
+        String phoneWithoutCode = phoneWithCode
+            .replaceAll('+91', '')
+            .replaceAll(' ', '');
 
-        if (!doc.exists) {
-          // 🚨 SMART SECURITY: Customers automatically active honge, par Staff 'false' rahega jab tak Admin verify na kare!
+        // 🚀 THE FIX: Check if Admin already created this staff by Phone Number!
+        var existingDocs = await _db
+            .collection(roleCollection)
+            .where('phone', whereIn: [phoneWithCode, phoneWithoutCode])
+            .limit(1)
+            .get();
+
+        DocumentReference docRef;
+
+        if (existingDocs.docs.isNotEmpty) {
+          // ✅ Admin panel wala profile mil gaya! Usko use karo.
+          docRef = existingDocs.docs.first.reference;
+        } else {
+          // 🆕 Naya user hai (Customer flow ya unregistered staff)
+          docRef = _db.collection(roleCollection).doc(userCred.user!.uid);
+
           bool isAutoActive = (roleCollection == 'users');
-
-          // Create new user in DB
           await docRef.set({
             ...initialData,
             'uid': userCred.user!.uid,
-            'phone': userCred.user!.phoneNumber,
+            'phone': phoneWithCode,
             'createdAt': FieldValue.serverTimestamp(),
-            'isActive': isAutoActive, // Yahan masterstroke khela hai humne!
+            'isActive': isAutoActive,
           });
         }
 
-        // Update session ID for anti-hijack (from Module 2)
+        // 🔄 Sync Auth UID and Update Session ID (Anti-hijack)
         await docRef.update({
+          'uid': userCred.user!.uid,
           'lastLoginAt': FieldValue.serverTimestamp(),
           'activeSessionId': DateTime.now().millisecondsSinceEpoch.toString(),
         });

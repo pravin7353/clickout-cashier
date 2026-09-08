@@ -62,10 +62,7 @@ class FirestoreService {
       'collectedBy': empId,
       'timestamp': FieldValue.serverTimestamp(),
 
-      // 🚀 Just to be 100% safe, re-stamp the routing IDs on update
-      'tenantId': SessionManager.tenantId,
-      'storeId': SessionManager.storeId,
-      'branchCode': SessionManager.branchCode,
+      // 🚀 THE FIX: Removed re-stamping of routing IDs. Customer's original store ID stays intact!
     });
   }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../screens/auth/login_screen.dart';
 import '../services/auth_service.dart';
 
@@ -17,6 +18,47 @@ class SessionManager extends StatefulWidget {
   static String zoneId = '';
   static String regionId = '';
   static String branchCode = ''; // Legacy ID
+  static String empName = '';
+  static String uid = '';
+
+  // 🔒 Save session to SharedPreferences
+  static Future<void> saveSession({
+    required String uid,
+    required String empName,
+    required String tId,
+    required String sId,
+    required String zId,
+    required String rId,
+    required String bCode,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('uid', uid);
+    await prefs.setString('empName', empName);
+    await prefs.setString('tenantId', tId);
+    await prefs.setString('storeId', sId);
+    await prefs.setString('zoneId', zId);
+    await prefs.setString('regionId', rId);
+    await prefs.setString('branchCode', bCode);
+    setStoreContext(tId: tId, sId: sId, zId: zId, rId: rId, bCode: bCode);
+    SessionManager.empName = empName;
+    SessionManager.uid = uid;
+  }
+
+  // 🔓 Load session from SharedPreferences
+  static Future<bool> loadSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedTenant = prefs.getString('tenantId') ?? '';
+    final savedStore = prefs.getString('storeId') ?? '';
+    if (savedTenant.isEmpty || savedStore.isEmpty) return false;
+    tenantId = savedTenant;
+    storeId = savedStore;
+    zoneId = prefs.getString('zoneId') ?? '';
+    regionId = prefs.getString('regionId') ?? '';
+    branchCode = prefs.getString('branchCode') ?? '';
+    empName = prefs.getString('empName') ?? '';
+    uid = prefs.getString('uid') ?? '';
+    return true;
+  }
 
   // Ye function login ya QR scan success hone par call karna hai
   static void setStoreContext({
@@ -40,6 +82,9 @@ class SessionManager extends StatefulWidget {
     zoneId = '';
     regionId = '';
     branchCode = '';
+    empName = '';
+    uid = '';
+    SharedPreferences.getInstance().then((prefs) => prefs.clear());
   }
   // ==========================================================
 
@@ -63,8 +108,7 @@ class SessionManager extends StatefulWidget {
 
 class _SessionManagerState extends State<SessionManager> {
   Timer? _timer;
-  final Duration _timeoutDuration = const Duration(minutes: 20);
-  bool _isLoggedIn = true; // 🚀 By Default Active
+  // 🚀 CLEANUP: Faltu timeout aur login status variables hata diye kyunki ab hum hamesha logged-in rehte hain!
 
   @override
   void initState() {
@@ -73,7 +117,6 @@ class _SessionManagerState extends State<SessionManager> {
   }
 
   Future<void> _stopTimer() async {
-    _isLoggedIn = false;
     _timer?.cancel();
     _timer = null;
 
@@ -86,22 +129,15 @@ class _SessionManagerState extends State<SessionManager> {
       MaterialPageRoute(builder: (context) => const LoginScreen()),
       (route) => false,
     );
-    print("🔒 Session Timer Stopped (User Logged Out)");
+    debugPrint("🔒 Session Timer Stopped (User Logged Out)");
   }
 
   void _resetTimer() {
-    if (!_isLoggedIn) return;
-    if (_timer != null) {
-      _timer!.cancel();
-    }
-    _timer = Timer(_timeoutDuration, _handleTimeout);
+    // 🚀 OTP PAISA BACHAO ABHIYAN!
+    _timer?.cancel();
   }
 
-  void _handleTimeout() async {
-    if (!_isLoggedIn) return;
-    print("⚠️ SESSION EXPIRED: Logging out user...");
-    await _stopTimer();
-  }
+  // 🚀 CLEANUP: _handleTimeout function hi hata diya kyunki ab timeout hona hi nahi hai!
 
   @override
   Widget build(BuildContext context) {
