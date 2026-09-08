@@ -20,6 +20,7 @@ class SessionManager extends StatefulWidget {
   static String branchCode = ''; // Legacy ID
   static String empName = '';
   static String uid = '';
+  static String staffDocId = '';
 
   // 🔒 Save session to SharedPreferences
   static Future<void> saveSession({
@@ -30,6 +31,7 @@ class SessionManager extends StatefulWidget {
     required String zId,
     required String rId,
     required String bCode,
+    String docId = '',
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('uid', uid);
@@ -39,6 +41,10 @@ class SessionManager extends StatefulWidget {
     await prefs.setString('zoneId', zId);
     await prefs.setString('regionId', rId);
     await prefs.setString('branchCode', bCode);
+    if (docId.isNotEmpty) {
+      await prefs.setString('staffDocId', docId);
+      SessionManager.staffDocId = docId;
+    }
     setStoreContext(tId: tId, sId: sId, zId: zId, rId: rId, bCode: bCode);
     SessionManager.empName = empName;
     SessionManager.uid = uid;

@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:clickout_cashier/core/theme/app_theme.dart';
 import 'package:clickout_cashier/screens/dashboard/dashboard_screen.dart';
 import 'package:clickout_cashier/services/analytics_service.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:clickout_cashier/auth/unified_auth_service.dart';
 import 'package:clickout_cashier/utils/session_manager.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,7 +16,6 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _branchCodeController = TextEditingController();
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
 
@@ -25,73 +25,49 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _verificationId;
 
   void _handleSendOtp() async {
-    if (_branchCodeController.text.isEmpty || _phoneController.text.isEmpty) {
+    final rawPhone = _phoneController.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (rawPhone.length != 10) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("⚠️ Please fill Branch Code and Phone Number"),
+          content: Text("⚠️ Please enter a valid 10-digit mobile number"),
         ),
       );
       return;
     }
-
-    /*setState(() => _isLoading = true);
-
-    await UnifiedAuthService.sendPhoneOtp(
-      phone: "+91${_phoneController.text.trim()}",
-      onCodeSent: (verificationId) {
-*/
-    //=================================================================
-    //bypass hone ke baad bhi loading chalti rahegi, jab tak OTP screen pe nahi pahunch jate, taki user ko lage ki kuch to ho raha hai
-    //=======================================================
 
     setState(() => _isLoading = true);
 
-    // 🔒 BRANCH VALIDATION — Phone + BranchCode match check
-    String cleanNumber = _phoneController.text.replaceAll(
-      RegExp(r'[^0-9]'),
-      '',
-    );
-    final branchCode = _branchCodeController.text.trim().toUpperCase();
+    // 🔒 Phone-only staff pre-check (avoids wasting SMS credits)
+    try {
+      final staffSnap = await FirebaseFirestore.instance
+          .collection('staff')
+          .where('phone', whereIn: [rawPhone, '+91$rawPhone'])
+          .where('isActive', isEqualTo: true)
+          .where('isDeleted', isEqualTo: false)
+          .limit(1)
+          .get();
 
-    final staffCheck = await FirebaseFirestore.instance
-        .collection('staff')
-        .where('phone', isEqualTo: cleanNumber)
-        .where('branchCode', isEqualTo: branchCode)
-        .where('isActive', isEqualTo: true)
-        .where('isDeleted', isEqualTo: false)
-        .limit(1)
-        .get();
-
-    if (staffCheck.docs.isEmpty) {
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            "❌ Access Denied: Phone not registered for this branch.",
+      if (staffSnap.docs.isEmpty) {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("This number is not registered as staff. Contact your admin."),
+            backgroundColor: Colors.red,
           ),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-    String finalPhone = "+91$cleanNumber";
-
-    // 🎯 EXACT FIREBASE MATCHING
-    if (cleanNumber == "8976543606") {
-      finalPhone = "+91 89765 43606";
-    } else if (cleanNumber == "9323137353") {
-      finalPhone = "+91 93232 37353"; // Guard number
+        );
+        return;
+      }
+    } catch (e) {
+      debugPrint("Staff pre-check warning: $e");
     }
 
-    // 🕵️ DEBUG LOG: Ye aapko VS Code / Android Studio ke console me dikhayega ki actually jaa kya raha hai
-    debugPrint("🚀🚀 SENDING TO FIREBASE EXACTLY AS: '$finalPhone'");
+    final finalPhone = "+91$rawPhone";
+    debugPrint("🚀 SENDING OTP TO: '$finalPhone'");
 
     await UnifiedAuthService.sendPhoneOtp(
       phone: finalPhone,
       onCodeSent: (verificationId) {
-        //=================================================================
-        //bypass hone ke baad bhi loading chalti rahegi, jab tak OTP screen pe nahi pahunch jate, taki user ko lage ki kuch to ho raha hai
-        //=======================================================
         if (!mounted) return;
         setState(() {
           _verificationId = verificationId;
@@ -102,7 +78,6 @@ class _LoginScreenState extends State<LoginScreen> {
       onError: (error) {
         if (!mounted) return;
         setState(() => _isLoading = false);
-        // 🚀 THE FIX: Ab app crash nahi hoga, ye error dikhayega
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("❌ $error"), backgroundColor: Colors.red),
         );
@@ -115,102 +90,124 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
+      // Step 1: Firebase Phone Auth
       final userCred = await UnifiedAuthService.verifyOtpAndLogin(
         verificationId: _verificationId!,
         smsCode: _otpController.text.trim(),
-        roleCollection: 'staff', // 🚀 FIX 1: Collection ka naam 'staff' hoga
-        initialData: {
-          'branchCode': _branchCodeController.text.trim(),
-          'role': 'CASHIER',
-        },
+        roleCollection: 'staff',
+        initialData: {'role': 'CASHIER'},
       );
 
-      if (mounted && userCred != null && userCred.user != null) {
-        // 🛡️ Custom claims (role/tenantId/branchCode) turant fresh karne ke liye
-        await Future.delayed(const Duration(seconds: 2));
-        await FirebaseAuth.instance.currentUser?.getIdToken(true);
+      if (!mounted || userCred == null || userCred.user == null) return;
 
-        // 🚀 FIX: UnifiedAuthService ne UID link kar diya hai, toh sidha UID se exact profile fetch karo!
-        final staffQuery = await FirebaseFirestore.instance
-            .collection('staff')
-            .where('uid', isEqualTo: userCred.user!.uid)
-            .limit(1)
-            .get();
+      // Step 2: Force-refresh token so Cloud Function sees the verified phone claim
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
 
-        if (staffQuery.docs.isEmpty) {
-          await UnifiedAuthService.logout('staff');
-          throw "Access Denied: Profile link failed.";
-        }
+      // Step 3: Call resolveStaffSession to auto-resolve tenantId/storeId/branchCode
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'resolveStaffSession',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 15)),
+      );
+      final result = await callable.call({'role': 'cashier'});
+      final sessionData = Map<String, dynamic>.from(result.data as Map);
 
-        final doc = staffQuery.docs.first;
-        final data = doc.data();
-        final name = data['name'] ?? 'Staff Member';
+      // Step 4: Validate completeness
+      final tenantId = (sessionData['tenantId'] ?? '').toString();
+      final storeId = (sessionData['storeId'] ?? '').toString();
+      final branchCode = (sessionData['branchCode'] ?? '').toString();
+      final name = (sessionData['name'] ?? 'Cashier').toString();
+      final docId = (sessionData['docId'] ?? '').toString();
 
-        // 🚨 SAAS DATA CHECKER (Duplicate Blocker)
-        if (data['tenantId'] == null || data['storeId'] == null) {
-          await UnifiedAuthService.logout('staff');
-          throw "⚠️ DUPLICATE TRASH DETECTED: Ye ek khali profile hai! Kripya Firebase me jake is number ki duplicate entry delete karein aur sirf Admin wali entry rakhein.";
-        }
-
-        // 🚨 ZERO TRUST AUTHORIZATION CHECK (The Bouncer)
-        bool isActive = data['isActive'] == true;
-        bool isDeleted = data['isDeleted'] == true;
-
-        if (!isActive || isDeleted) {
-          await UnifiedAuthService.logout('staff');
-          throw "Access Denied: Your account is pending admin approval or disabled.";
-        }
-
-        // 🚀 THE SAAS INJECTION: Load routing IDs into Memory
-        SessionManager.setStoreContext(
-          tId: data['tenantId'] ?? 'default_tenant',
-          sId: data['storeId'] ?? 'default_store',
-          zId: data['zoneId'] ?? 'default_zone',
-          rId: data['regionId'] ?? 'default_region',
-          bCode: data['branchCode'] ?? _branchCodeController.text.trim(),
-        );
-
-        try {
-          await _analytics.setUser(userCred.user!.uid);
-          await _analytics.logLogin(_branchCodeController.text.trim());
-        } catch (analyticsError) {
-          debugPrint("Analytics Error Ignored: $analyticsError");
-        }
-
-        await SessionManager.saveSession(
-          uid: userCred.user!.uid,
-          empName: name,
-          tId: data['tenantId'] ?? '',
-          sId: data['storeId'] ?? '',
-          zId: data['zoneId'] ?? '',
-          rId: data['regionId'] ?? '',
-          bCode: data['branchCode'] ?? _branchCodeController.text.trim(),
-        );
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DashboardScreen(
-              empId: userCred.user!.uid,
-              empName: name,
-              martId: SessionManager.branchCode,
-            ),
-          ),
-        );
+      if (tenantId.isEmpty || storeId.isEmpty) {
+        await UnifiedAuthService.logout('staff');
+        throw "⚠️ Staff profile incomplete (missing tenantId/storeId). Contact your admin.";
       }
+
+      // Step 5: Persist session
+      SessionManager.setStoreContext(
+        tId: tenantId,
+        sId: storeId,
+        zId: sessionData['zoneId']?.toString() ?? '',
+        rId: sessionData['regionId']?.toString() ?? '',
+        bCode: branchCode,
+      );
+
+      try {
+        await _analytics.setUser(userCred.user!.uid);
+        await _analytics.logLogin(branchCode);
+      } catch (analyticsError) {
+        debugPrint("Analytics Error Ignored: $analyticsError");
+      }
+
+      await SessionManager.saveSession(
+        uid: userCred.user!.uid,
+        empName: name,
+        tId: tenantId,
+        sId: storeId,
+        zId: sessionData['zoneId']?.toString() ?? '',
+        rId: sessionData['regionId']?.toString() ?? '',
+        bCode: branchCode,
+        docId: docId,
+      );
+
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DashboardScreen(
+            empId: userCred.user!.uid,
+            empName: name,
+            martId: branchCode,
+          ),
+        ),
+      );
     } catch (e, stack) {
       try {
         await _analytics.logError(e, stack);
       } catch (_) {} // 🛡️ CRASH SHIELD
 
       if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("❌ Login Failed: ${e.toString()}"),
-            backgroundColor: Colors.red,
-          ),
-        );
+        setState(() {
+          _isLoading = false;
+        });
+
+        final errStr = e.toString().toLowerCase();
+        final isNotFound = (e is FirebaseFunctionsException && e.code == 'not-found') ||
+            errStr.contains('not-found') ||
+            errStr.contains('no active staff record');
+
+        if (isNotFound) {
+          // Blocking dialog: don't allow proceeding, offer re-entering number
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text("Access Denied"),
+              content: const Text(
+                "This number is not registered as a cashier. Contact your admin.",
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      _isOtpSent = false;
+                      _otpController.clear();
+                    });
+                  },
+                  child: const Text("Re-enter Number"),
+                ),
+              ],
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("❌ Login Failed: ${e.toString()}"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
     }
   }
@@ -246,15 +243,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        TextField(
-                          controller: _branchCodeController,
-                          enabled: !_isOtpSent,
-                          decoration: const InputDecoration(
-                            labelText: "Branch Code",
-                            prefixIcon: Icon(Icons.store),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
                         if (!_isOtpSent) ...[
                           TextField(
                             controller: _phoneController,
