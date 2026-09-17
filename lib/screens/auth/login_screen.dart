@@ -37,30 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
 
-    // 🔒 Phone-only staff pre-check (avoids wasting SMS credits)
-    try {
-      final staffSnap = await FirebaseFirestore.instance
-          .collection('staff')
-          .where('phone', whereIn: [rawPhone, '+91$rawPhone'])
-          .where('isActive', isEqualTo: true)
-          .where('isDeleted', isEqualTo: false)
-          .limit(1)
-          .get();
-
-      if (staffSnap.docs.isEmpty) {
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("This number is not registered as staff. Contact your admin."),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-    } catch (e) {
-      debugPrint("Staff pre-check warning: $e");
-    }
+    // 🚀 Staff validation is now handled server-side in sendMsg91Otp
+    // (admin SDK bypasses Firestore rules — fixes permission-denied)
 
     final finalPhone = "+91$rawPhone";
     debugPrint("🚀 SENDING OTP TO: '$finalPhone'");
